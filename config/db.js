@@ -1,11 +1,11 @@
 const mysql = require('mysql2');
 
 const db = mysql.createConnection({
-  host: 'sql3.freesqldatabase.com',
-  user: 'sql3796152',
-  port:  '3306',
-  password: 'yrpt8Lum6l',
-  database: 'sql3796152'
+  host: 'mysql-1dac8753-miumg-afbb.b.aivencloud.com',
+  user: 'avnadmin',
+  port:  '10808',
+  password: 'AVNS_F7RvG1VRLpIPbBA9IRo',
+  database: 'defaultdb'
 });
 
 db.connect((err) => {

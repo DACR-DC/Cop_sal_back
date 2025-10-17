@@ -64,7 +64,6 @@ jobs:
           fi
         continue-on-error: true
 
-      # ===================== PRUEBAS DE LOGIN SIN DB =====================
       - name: Pruebas login 
         run: |
           node - <<'NODE'
@@ -177,7 +176,7 @@ jobs:
             if (failed > 0) process.exit(1); else process.exit(0);
           }, 0);
           NODE
-        |
+
           tee -a pipeline_logs/login-tests.log
 
       - name: Subir artefacto de logs

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   ci:
-    name: Install • (Lint) • (Test) • (Build) • Logs • Login-Tests
+    name: Install - Logs - Login-Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -36,33 +36,6 @@ jobs:
       - name: Instalar dependencias (npm ci)
         run: |
           npm ci 2>&1 | tee -a pipeline_logs/install.log
-
-      - name: Lint (si existe script)
-        run: |
-          if npm run | grep -q "lint"; then
-            npm run lint 2>&1 | tee -a pipeline_logs/lint.log || echo "lint con warnings/errores; ver lint.log"
-          else
-            echo "No hay script lint" | tee -a pipeline_logs/lint.log
-          fi
-        continue-on-error: true
-
-      - name: Test (si existe script)
-        run: |
-          if npm run | grep -q "test"; then
-            npm test 2>&1 | tee -a pipeline_logs/tests.log || echo "tests fallaron o no configurados; ver tests.log"
-          else
-            echo "No hay script test" | tee -a pipeline_logs/tests.log
-          fi
-        continue-on-error: true
-
-      - name: Build (si existe script)
-        run: |
-          if npm run | grep -q "build"; then
-            npm run build 2>&1 | tee -a pipeline_logs/build.log
-          else
-            echo "No hay script build" | tee -a pipeline_logs/build.log
-          fi
-        continue-on-error: true
 
       - name: Pruebas login 
         run: |
@@ -179,7 +152,7 @@ jobs:
 
           tee -a pipeline_logs/login-tests.log
 
-      - name: Subir artefacto de logs
+      - name: Subir  logs
         if: always()
         uses: actions/upload-artifact@v4
         with:

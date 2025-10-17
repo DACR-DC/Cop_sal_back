@@ -15,6 +15,6 @@ db.connect((err) => {
   console.log('Conectado a la base de datos MySQL');
 });
 
-//asd
+//comentario de prueba del pipeline
 
 module.exports = db;

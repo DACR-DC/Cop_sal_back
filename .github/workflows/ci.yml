@@ -1,0 +1,188 @@
+name: PIPELINE_SEGURIDAD
+
+on:
+  push:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Install • (Lint) • (Test) • (Build) • Logs • Login-Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Carpeta de logs
+        run: mkdir -p pipeline_logs
+
+      - name: Metadata del run
+        run: |
+          echo "Commit: $GITHUB_SHA" | tee -a pipeline_logs/metadata.txt
+          echo "Branch: $GITHUB_REF_NAME" | tee -a pipeline_logs/metadata.txt
+          node -v | tee -a pipeline_logs/metadata.txt
+          npm -v | tee -a pipeline_logs/metadata.txt
+
+      - name: Instalar dependencias (npm ci)
+        run: |
+          npm ci 2>&1 | tee -a pipeline_logs/install.log
+
+      - name: Lint (si existe script)
+        run: |
+          if npm run | grep -q "lint"; then
+            npm run lint 2>&1 | tee -a pipeline_logs/lint.log || echo "lint con warnings/errores; ver lint.log"
+          else
+            echo "No hay script lint" | tee -a pipeline_logs/lint.log
+          fi
+        continue-on-error: true
+
+      - name: Test (si existe script)
+        run: |
+          if npm run | grep -q "test"; then
+            npm test 2>&1 | tee -a pipeline_logs/tests.log || echo "tests fallaron o no configurados; ver tests.log"
+          else
+            echo "No hay script test" | tee -a pipeline_logs/tests.log
+          fi
+        continue-on-error: true
+
+      - name: Build (si existe script)
+        run: |
+          if npm run | grep -q "build"; then
+            npm run build 2>&1 | tee -a pipeline_logs/build.log
+          else
+            echo "No hay script build" | tee -a pipeline_logs/build.log
+          fi
+        continue-on-error: true
+
+      # ===================== PRUEBAS DE LOGIN SIN DB =====================
+      - name: Pruebas login 
+        run: |
+          node - <<'NODE'
+          const path = require('path');
+
+          // --- Utilidades para "req" y "res" falsos ---
+          function fakeRes() {
+            return {
+              statusCode: 200,
+              body: null,
+              _status: 200,
+              status(code) { this._status = code; return this; },
+              json(obj)   { this.body = obj; this.statusCode = this._status; return this; },
+              send(obj)   { this.body = obj; this.statusCode = this._status; return this; }
+            };
+          }
+
+          function fakeReq(body) {
+            // sin middlewares de express-validator, validationResult(req) devolverá vacío
+            return { body };
+          }
+
+          // --- Monkeypatch de bcrypt (solo lo que usa el controlador) ---
+          const bcryptPath = require.resolve('bcrypt');
+          const fakeBcrypt = {
+            compare: async (plain, hash) => true, // sobreescribiremos en cada caso
+            hash: async (...args) => { throw new Error('no usado en estos tests'); },
+            hashSync: (...args) => { throw new Error('no usado en estos tests'); }
+          };
+          require.cache[bcryptPath] = { exports: fakeBcrypt };
+
+          // --- Monkeypatch del userModel ANTES de requerir el controller ---
+          const modelFsPath = path.resolve(process.cwd(), 'models/userModel.js');
+          let loginUserImpl = (usuario_login, cb) => cb(null, []); // default: no encontrado
+          const fakeModel = {
+            loginUser: (...args) => loginUserImpl(...args),
+            crearUsuario: () => { throw new Error('no usado'); },
+            obtenerUsuarios: () => { throw new Error('no usado'); },
+            actualizarUsuario: () => { throw new Error('no usado'); },
+            eliminarUsuario: () => { throw new Error('no usado'); }
+          };
+          require.cache[modelFsPath] = { exports: fakeModel };
+
+          // --- Cargar el controller con los mocks en su lugar ---
+          const controller = require('./controllers/userController');
+
+          let passed = 0, failed = 0;
+          async function runCase(name, fn) {
+            try {
+              await fn();
+              console.log(`✓ ${name}`);
+              passed++;
+            } catch (e) {
+              console.error(`✗ ${name}:`, e.message);
+              failed++;
+            }
+          }
+
+          // Caso 1: ÉXITO (usuario existe y bcrypt.compare => true)
+          runCase('login éxito', async () => {
+            loginUserImpl = (usuario_login, cb) => {
+              cb(null, [{ id_login: 1, usuario_login: 'admin', contrasena_login: 'hash' }]);
+            };
+            fakeBcrypt.compare = async () => true;
+
+            const req = fakeReq({ usuario_login: 'admin', contrasena_login: 'Secr3t$123' });
+            const res = fakeRes();
+            await controller.login(req, res);
+
+            if (res.statusCode !== 200) throw new Error(`esperado 200, recibido ${res.statusCode}`);
+            if (!res.body || res.body.success !== true || res.body.nombre !== 'admin') {
+              throw new Error(`respuesta inesperada: ${JSON.stringify(res.body)}`);
+            }
+          });
+
+          // Caso 2: CONTRASEÑA INCORRECTA (usuario existe y bcrypt.compare => false)
+          runCase('login contraseña incorrecta', async () => {
+            loginUserImpl = (usuario_login, cb) => {
+              cb(null, [{ id_login: 1, usuario_login: 'admin', contrasena_login: 'hash' }]);
+            };
+            fakeBcrypt.compare = async () => false;
+
+            const req = fakeReq({ usuario_login: 'admin', contrasena_login: 'wrong' });
+            const res = fakeRes();
+            await controller.login(req, res);
+
+            if (res.statusCode !== 401) throw new Error(`esperado 401, recibido ${res.statusCode}`);
+            if (!res.body || res.body.success !== false) {
+              throw new Error(`respuesta inesperada: ${JSON.stringify(res.body)}`);
+            }
+          });
+
+          // Caso 3: USUARIO NO ENCONTRADO (model retorna [])
+          runCase('login usuario no encontrado', async () => {
+            loginUserImpl = (usuario_login, cb) => { cb(null, []); };
+            fakeBcrypt.compare = async () => { throw new Error('no debe llamarse'); };
+
+            const req = fakeReq({ usuario_login: 'nadie', contrasena_login: 'x' });
+            const res = fakeRes();
+            await controller.login(req, res);
+
+            if (res.statusCode !== 404) throw new Error(`esperado 404, recibido ${res.statusCode}`);
+            if (!res.body || res.body.success !== false) {
+              throw new Error(`respuesta inesperada: ${JSON.stringify(res.body)}`);
+            }
+          });
+
+          setTimeout(() => {
+            console.log(`Resultados → OK: ${passed}, FAIL: ${failed}`);
+            if (failed > 0) process.exit(1); else process.exit(0);
+          }, 0);
+          NODE
+        |
+          tee -a pipeline_logs/login-tests.log
+
+      - name: Subir artefacto de logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_id }}
+          path: pipeline_logs
